@@ -6,3 +6,4 @@ __pycache__/
 debug_first_response.txt
 debug_swarm.csv
 qc_report.json
+sniper.log

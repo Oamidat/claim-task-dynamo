@@ -1,30 +1,20 @@
 # claim-task-dynamo
 
-An asynchronous Python client for claiming tasks from Handshake's batched tRPC
-endpoint. It inspects claim responses, records results, and produces
-CSV and JSON reports.
+An asynchronous Python API client that polls for claimable Handshake tasks,
+claims each returned page concurrently, and can inspect available or previously
+claimed tasks.
 
 ## Warning
 
-This script sends state-changing requests. Its defaults start 80 concurrent
-workers for 90 seconds, so only run it against a project you are authorized to
-use. A successful discovery request can also claim a task.
+This script sends state-changing requests and may issue multiple claims at the
+same time. Only run it for a project and account you are authorized to use.
 
 ## Requirements
 
-- Python 3.8 or newer
+- Python 3.9 or newer
 - An authenticated Handshake session
 
-In GitHub Codespaces or another Linux environment, create a virtual environment
-and install the dependencies:
-
-```bash
-python -m venv .venv
-source .venv/bin/activate
-python -m pip install -r requirements.txt
-```
-
-On Windows PowerShell, use:
+Create a virtual environment and install the required dependency:
 
 ```powershell
 python -m venv .venv
@@ -32,45 +22,22 @@ python -m venv .venv
 python -m pip install -r requirements.txt
 ```
 
+Desktop notifications and sounds are optional. Install `plyer` and `playsound`
+separately if needed.
+
 ## Configuration
 
-Create a private credentials file from the included example:
-
-```bash
-cp credentials.example.json credentials.json
-```
-
-Add each authenticated browser cookie to the `cookies` object in
-`credentials.json`:
-
-```json
-{
-  "cookies": {
-    "cookie-name": "cookie-value",
-    "another-cookie": "another-value"
-  },
-  "annotationProjectId": "a1d39753-ae51-41df-8c86-2b7e73c6bd6b",
-  "baggage": "session.id=...,user.id=...",
-  "traceparent": "00-...",
-  "tracestate": "dd=s:1;o:rum"
-}
-```
-
-The copied browser `fetch()` code does not include cookies because the browser
-adds them through `credentials: "include"`. Retrieve the cookie names and
-values from Chrome DevTools under **Application > Cookies** or from the
-request's `cookie` header in the **Network** panel.
-
-`credentials.json` is excluded from Git and must never be committed. Environment
-variables remain available as overrides:
+The authentication cookie is read only from the `HANDSHAKE_COOKIE` environment
+variable. Set it to the complete value of the authenticated request's `Cookie`
+header before running the script:
 
 ```powershell
-$env:HANDSHAKE_COOKIE = 'cookie-name=cookie-value; another-cookie=another-value'
-$env:HANDSHAKE_ANNOTATION_PROJECT_ID = "your-project-id"
-$env:HANDSHAKE_BAGGAGE = "session.id=..."
-$env:HANDSHAKE_TRACEPARENT = "00-..."
-$env:HANDSHAKE_TRACESTATE = "dd=s:1;o:rum"
+$env:HANDSHAKE_COOKIE = '<your Cookie header value>'
 ```
+
+Do not commit the cookie or place it directly in `claim_task.py`. Browser
+session cookies grant account access and should be rotated immediately if they
+are exposed.
 
 ## Usage
 
@@ -78,14 +45,10 @@ $env:HANDSHAKE_TRACESTATE = "dd=s:1;o:rum"
 python claim_task.py
 ```
 
-Press `Ctrl+C` to request a graceful stop. Runtime behavior can be adjusted
-with the constants near the top of `claim_task.py`, including `NUM_WORKERS`
-and `DURATION_SECONDS`.
+The menu provides three modes:
 
-## Outputs
+1. Continuously poll and claim available tasks.
+2. Test authentication and list currently available tasks.
+3. Fetch active and past claimed tasks.
 
-- `debug_first_response.txt`: first discovery response
-- `debug_swarm.csv`: per-attempt status and latency data
-- `qc_report.json`: aggregate claim counts and latency statistics
-
-These generated files are excluded from Git.
+Runtime activity is written to the console and `sniper.log`.
