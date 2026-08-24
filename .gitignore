@@ -1,0 +1,7 @@
+.env
+.venv/
+__pycache__/
+*.pyc
+debug_first_response.txt
+debug_swarm.csv
+qc_report.json
