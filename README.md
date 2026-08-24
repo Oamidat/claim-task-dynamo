@@ -15,12 +15,21 @@ use. A successful discovery request can also claim a task.
 - Python 3.8 or newer
 - An authenticated Handshake session
 
-Create a virtual environment and install the HTTP dependency:
+In GitHub Codespaces or another Linux environment, create a virtual environment
+and install the dependencies:
+
+```bash
+python -m venv .venv
+source .venv/bin/activate
+python -m pip install -r requirements.txt
+```
+
+On Windows PowerShell, use:
 
 ```powershell
 python -m venv .venv
 .\.venv\Scripts\Activate.ps1
-python -m pip install aiohttp
+python -m pip install -r requirements.txt
 ```
 
 ## Configuration
