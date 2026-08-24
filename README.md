@@ -14,7 +14,16 @@ same time. Only run it for a project and account you are authorized to use.
 - Python 3.9 or newer
 - An authenticated Handshake session
 
-Create a virtual environment and install the required dependency:
+Create a virtual environment and install the required dependency. In a
+Codespace or another Linux environment, run:
+
+```bash
+python -m venv .venv
+source .venv/bin/activate
+python -m pip install -r requirements.txt
+```
+
+On Windows PowerShell, run:
 
 ```powershell
 python -m venv .venv
@@ -27,17 +36,25 @@ separately if needed.
 
 ## Configuration
 
-The authentication cookie is read only from the `HANDSHAKE_COOKIE` environment
-variable. Set it to the complete value of the authenticated request's `Cookie`
-header before running the script:
+Create your private credentials file from the tracked example:
 
-```powershell
-$env:HANDSHAKE_COOKIE = '<your Cookie header value>'
+```bash
+cp credentials.example.json credentials.json
 ```
 
-Do not commit the cookie or place it directly in `claim_task.py`. Browser
-session cookies grant account access and should be rotated immediately if they
-are exposed.
+Add each authenticated browser cookie to the `cookies` object in
+`credentials.json`. The script combines those entries into the request's
+`Cookie` header automatically. It also reads `annotationProjectId`, `baggage`,
+`traceparent`, and `tracestate` from that file when present.
+
+`credentials.json` is ignored by Git and must not be committed. The
+`HANDSHAKE_COOKIE`, `HANDSHAKE_ANNOTATION_PROJECT_ID`, `HANDSHAKE_BAGGAGE`,
+`HANDSHAKE_TRACEPARENT`, and `HANDSHAKE_TRACESTATE` environment variables can
+override file values. Set `HANDSHAKE_CREDENTIALS_FILE` to use a different
+credentials file path.
+
+Browser session cookies grant account access and should be rotated immediately
+if they are exposed.
 
 ## Usage
 
@@ -47,7 +64,7 @@ python claim_task.py
 
 The menu provides three modes:
 
-1. Continuously poll and claim available tasks.
+1. Continuously send concurrent batched `task.claimNextTask` requests.
 2. Test authentication and list currently available tasks.
 3. Fetch active and past claimed tasks.
 

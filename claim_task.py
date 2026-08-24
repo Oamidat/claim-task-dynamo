@@ -23,26 +23,91 @@ try:
 except ImportError:
     playsound = None
 
+
+def load_credentials() -> Dict[str, Any]:
+    path = os.environ.get("HANDSHAKE_CREDENTIALS_FILE", "credentials.json")
+    if not os.path.isfile(path):
+        return {}
+
+    try:
+        with open(path, encoding="utf-8") as credentials_file:
+            credentials = json.load(credentials_file)
+    except (OSError, json.JSONDecodeError) as exc:
+        raise RuntimeError(f"Could not load {path}: {exc}") from exc
+
+    if not isinstance(credentials, dict):
+        raise ValueError(f"{path} must contain a JSON object.")
+    return credentials
+
+
 # ---------- CONFIGURATION ----------
-ANNOTATION_PROJECT_ID = "a1d39753-ae51-41df-8c86-2b7e73c6bd6b"
-CLAIMER_ID = "3f64c23c-3892-4cb5-9248-2b07862e4de0"
+CREDENTIALS = load_credentials()
+ANNOTATION_PROJECT_ID = os.environ.get(
+    "HANDSHAKE_ANNOTATION_PROJECT_ID",
+    CREDENTIALS.get(
+        "annotationProjectId",
+        "a1d39753-ae51-41df-8c86-2b7e73c6bd6b",
+    ),
+)
 BASE_URL = "https://ai.joinhandshake.com/api/trpc"
 
 COOKIE = os.environ.get("HANDSHAKE_COOKIE")
+if not COOKIE:
+    cookies = CREDENTIALS.get("cookies", {})
+    if not isinstance(cookies, dict):
+        raise ValueError("credentials.json 'cookies' must be a JSON object.")
+    COOKIE = "; ".join(f"{name}={value}" for name, value in cookies.items())
+
 HEADERS = {
+    "Accept": "*/*",
+    "Accept-Language": "en-US,en;q=0.9",
     "Content-Type": "application/json",
+    "Origin": "https://ai.joinhandshake.com",
+    "Priority": "u=1, i",
+    "Referer": "https://ai.joinhandshake.com/fellow/projects",
+    "Sec-CH-UA": (
+        '"Chromium";v="148", "Google Chrome";v="148", '
+        '"Not/A)Brand";v="99"'
+    ),
+    "Sec-CH-UA-Mobile": "?0",
+    "Sec-CH-UA-Platform": '"Windows"',
+    "Sec-Fetch-Dest": "empty",
+    "Sec-Fetch-Mode": "cors",
+    "Sec-Fetch-Site": "same-origin",
+    "User-Agent": (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) "
+        "Chrome/148.0.0.0 Safari/537.36"
+    ),
 }
 if COOKIE:
     HEADERS["Cookie"] = COOKIE
 
+for env_name, config_name, header_name in (
+    ("HANDSHAKE_BAGGAGE", "baggage", "Baggage"),
+    ("HANDSHAKE_TRACEPARENT", "traceparent", "Traceparent"),
+    ("HANDSHAKE_TRACESTATE", "tracestate", "Tracestate"),
+):
+    value = os.environ.get(env_name) or CREDENTIALS.get(config_name)
+    if value:
+        HEADERS[header_name] = str(value)
+
 POLL_INTERVAL = 1
+CLAIM_CONCURRENCY = 10
 INITIAL_BACKOFF = 60
 MAX_BACKOFF = 300
 backoff = INITIAL_BACKOFF
 
 GET_TASKS_URL = f"{BASE_URL}/task.getAllClaimableTasksForFellow"
-CLAIM_URL = f"{BASE_URL}/task.claimTask"
+CLAIM_NEXT_URL = f"{BASE_URL}/task.claimNextTask?batch=1"
 GET_MY_TASKS_URL = f"{BASE_URL}/task.listClaimedTasksForFellow"
+CLAIM_NEXT_PAYLOAD = {
+    "0": {
+        "json": {
+            "annotationProjectId": ANNOTATION_PROJECT_ID,
+        }
+    }
+}
 
 log_format = "%(asctime)s [%(levelname)s] %(message)s"
 logging.basicConfig(
@@ -125,36 +190,37 @@ async def fetch_tasks(
         return None
 
 
-async def claim_task(
+async def claim_next_task(
     session: aiohttp.ClientSession,
-    task_id: str,
 ) -> tuple[bool, bool]:
-    payload = {
-        "json": {
-            "taskId": task_id,
-            "annotationProjectId": ANNOTATION_PROJECT_ID,
-            "claimerId": CLAIMER_ID,
-        }
-    }
     try:
-        async with session.post(CLAIM_URL, json=payload, timeout=10) as resp:
+        async with session.post(
+            CLAIM_NEXT_URL,
+            json=CLAIM_NEXT_PAYLOAD,
+            timeout=10,
+        ) as resp:
             if resp.status == 200:
-                logger.info("Claimed task %s", task_id)
+                data = await resp.json(content_type=None)
+                result = (
+                    data[0]
+                    .get("result", {})
+                    .get("data", {})
+                    .get("json", {})
+                )
+                task_id = result.get("id") or result.get("taskId")
+                if task_id:
+                    logger.info("Claimed task %s", task_id)
+                else:
+                    logger.info("Claimed next task")
                 return True, False
             if resp.status == 429:
-                logger.warning("Rate limited while claiming %s", task_id)
                 return False, True
-            if resp.status == 409:
-                logger.warning(
-                    "Too slow! Task %s was just claimed by someone else.",
-                    task_id,
-                )
+            if resp.status in (404, 409, 410):
                 return False, False
 
             text = await resp.text()
             logger.error(
-                "Claim failed for %s: %s - %s",
-                task_id,
+                "Claim-next request failed: %s - %s",
                 resp.status,
                 text,
             )
@@ -168,7 +234,9 @@ async def poll_loop():
     global backoff
 
     logger.info(
-        "Async Sniper started. Polling every %d seconds.",
+        "Async Sniper started with %d concurrent claim-next requests every "
+        "%d seconds.",
+        CLAIM_CONCURRENCY,
         POLL_INTERVAL,
     )
 
@@ -179,51 +247,25 @@ async def poll_loop():
         connector=connector,
     ) as session:
         while True:
-            offset = 0
-            total_claimed = 0
-            while True:
-                tasks = await fetch_tasks(session, offset)
-                if tasks is None:
-                    await asyncio.sleep(5)
-                    continue
-                if not tasks:
-                    break
-
-                logger.info(
-                    "Found %d task(s) on page %d. Firing parallel claims!",
-                    len(tasks),
-                    offset // 10 + 1,
-                )
-
-                claim_coroutines = []
-                for task in tasks:
-                    task_id = task.get("id")
-                    if task_id:
-                        claim_coroutines.append(claim_task(session, task_id))
-
-                if claim_coroutines:
-                    results = await asyncio.gather(*claim_coroutines)
-                    for success, rate_limited in results:
-                        if rate_limited:
-                            logger.info(
-                                "Rate limited. Waiting %s seconds...",
-                                backoff,
-                            )
-                            await asyncio.sleep(backoff)
-                            backoff = min(backoff * 1.5, MAX_BACKOFF)
-                        if success:
-                            total_claimed += 1
-                            backoff = INITIAL_BACKOFF
-                            notify("Sniper", "Claimed a task!")
-                            play_sound()
-
-                offset += 10
-                await asyncio.sleep(0.1)
+            results = await asyncio.gather(
+                *(claim_next_task(session) for _ in range(CLAIM_CONCURRENCY))
+            )
+            total_claimed = sum(success for success, _ in results)
+            rate_limited = any(limited for _, limited in results)
 
             if total_claimed == 0:
                 logger.info("No tasks available.")
             else:
                 logger.info("Claimed %d task(s) this cycle.", total_claimed)
+                backoff = INITIAL_BACKOFF
+                notify("Sniper", f"Claimed {total_claimed} task(s)!")
+                play_sound()
+
+            if rate_limited:
+                logger.info("Rate limited. Waiting %s seconds...", backoff)
+                await asyncio.sleep(backoff)
+                backoff = min(backoff * 1.5, MAX_BACKOFF)
+                continue
 
             await asyncio.sleep(POLL_INTERVAL)
 
@@ -388,8 +430,8 @@ async def test_my_tasks():
 if __name__ == "__main__":
     if not COOKIE:
         logger.error(
-            "Authentication cookie missing. Set the HANDSHAKE_COOKIE "
-            "environment variable before running this script."
+            "Authentication cookie missing. Add cookies to credentials.json "
+            "or set the HANDSHAKE_COOKIE environment variable."
         )
         sys.exit(2)
 
