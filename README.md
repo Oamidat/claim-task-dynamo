@@ -34,23 +34,39 @@ python -m pip install -r requirements.txt
 
 ## Configuration
 
-Provide the authenticated browser cookie header through an environment
-variable. Do not add cookie values or session tokens to the repository.
+Create a private credentials file from the included example:
+
+```bash
+cp credentials.example.json credentials.json
+```
+
+Add each authenticated browser cookie to the `cookies` object in
+`credentials.json`:
+
+```json
+{
+  "cookies": {
+    "cookie-name": "cookie-value",
+    "another-cookie": "another-value"
+  },
+  "annotationProjectId": "a1d39753-ae51-41df-8c86-2b7e73c6bd6b",
+  "baggage": "session.id=...,user.id=...",
+  "traceparent": "00-...",
+  "tracestate": "dd=s:1;o:rum"
+}
+```
+
+The copied browser `fetch()` code does not include cookies because the browser
+adds them through `credentials: "include"`. Retrieve the cookie names and
+values from Chrome DevTools under **Application > Cookies** or from the
+request's `cookie` header in the **Network** panel.
+
+`credentials.json` is excluded from Git and must never be committed. Environment
+variables remain available as overrides:
 
 ```powershell
 $env:HANDSHAKE_COOKIE = 'cookie-name=cookie-value; another-cookie=another-value'
-```
-
-The configured annotation project defaults to
-`a1d39753-ae51-41df-8c86-2b7e73c6bd6b`. Override it when needed:
-
-```powershell
 $env:HANDSHAKE_ANNOTATION_PROJECT_ID = "your-project-id"
-```
-
-Optional tracing headers can also be supplied:
-
-```powershell
 $env:HANDSHAKE_BAGGAGE = "session.id=..."
 $env:HANDSHAKE_TRACEPARENT = "00-..."
 $env:HANDSHAKE_TRACESTATE = "dd=s:1;o:rum"

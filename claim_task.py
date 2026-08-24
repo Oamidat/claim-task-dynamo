@@ -20,15 +20,41 @@ from typing import Optional, List, Dict, Any, Tuple
 # ----------------------------------------------------------------------
 # Request configuration
 # ----------------------------------------------------------------------
+def load_credentials() -> Dict[str, Any]:
+    """Load optional local credentials without requiring another dependency."""
+    path = os.environ.get("HANDSHAKE_CREDENTIALS_FILE", "credentials.json")
+    if not os.path.isfile(path):
+        return {}
+
+    try:
+        with open(path, encoding="utf-8") as credentials_file:
+            credentials = json.load(credentials_file)
+    except (OSError, json.JSONDecodeError) as exc:
+        raise RuntimeError(f"Could not load {path}: {exc}") from exc
+
+    if not isinstance(credentials, dict):
+        raise ValueError(f"{path} must contain a JSON object.")
+    return credentials
+
+
+CREDENTIALS = load_credentials()
 CLAIM_URL = "https://ai.joinhandshake.com/api/trpc/task.claimNextTask?batch=1"
 ANNOTATION_PROJECT_ID = os.environ.get(
     "HANDSHAKE_ANNOTATION_PROJECT_ID",
-    "a1d39753-ae51-41df-8c86-2b7e73c6bd6b"
+    CREDENTIALS.get(
+        "annotationProjectId",
+        "a1d39753-ae51-41df-8c86-2b7e73c6bd6b"
+    )
 )
 CLAIM_PAYLOAD = {
     "0": {"json": {"annotationProjectId": ANNOTATION_PROJECT_ID}}
 }
 COOKIE = os.environ.get("HANDSHAKE_COOKIE", "")
+if not COOKIE:
+    cookies = CREDENTIALS.get("cookies", {})
+    if not isinstance(cookies, dict):
+        raise ValueError("credentials.json 'cookies' must be a JSON object.")
+    COOKIE = "; ".join(f"{name}={value}" for name, value in cookies.items())
 BASE_HEADERS = {
     "Accept": "*/*",
     "Accept-Language": "en-US,en;q=0.9",
@@ -47,12 +73,12 @@ BASE_HEADERS = {
 if COOKIE:
     BASE_HEADERS["Cookie"] = COOKIE
 
-for env_name, header_name in (
-    ("HANDSHAKE_BAGGAGE", "Baggage"),
-    ("HANDSHAKE_TRACEPARENT", "Traceparent"),
-    ("HANDSHAKE_TRACESTATE", "Tracestate"),
+for env_name, config_name, header_name in (
+    ("HANDSHAKE_BAGGAGE", "baggage", "Baggage"),
+    ("HANDSHAKE_TRACEPARENT", "traceparent", "Traceparent"),
+    ("HANDSHAKE_TRACESTATE", "tracestate", "Tracestate"),
 ):
-    if value := os.environ.get(env_name):
+    if value := os.environ.get(env_name) or CREDENTIALS.get(config_name):
         BASE_HEADERS[header_name] = value
 
 NUM_WORKERS = 80
@@ -341,7 +367,11 @@ async def main() -> None:
     global total_claims_attempted, total_claims_successful, claimed_task_ids, invite_confirmations, claim_latencies
 
     if not COOKIE:
-        print("HANDSHAKE_COOKIE environment variable is required.", file=sys.stderr)
+        print(
+            "Authentication cookies are required in credentials.json or "
+            "HANDSHAKE_COOKIE.",
+            file=sys.stderr
+        )
         sys.exit(2)
 
     loop = asyncio.get_running_loop()
